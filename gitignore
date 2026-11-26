@@ -1,0 +1,12 @@
+# Never commit secrets or user data
+.streamlit/secrets.toml
+aquaai_data/
+*.db
+*.db-journal
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
