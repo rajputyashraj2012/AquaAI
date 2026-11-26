@@ -51,6 +51,15 @@ streamlit run aquaai.py
 Deploy from GitHub with `aquaai.py` as the main file, paste the `[admin]` block
 into Settings, Secrets. Remember: no persistent disk.
 
+## Adding more administrators (up to 3 in total)
+Only the first administrator comes from the environment/secrets. After signing in,
+open **Admin Accounts** in the sidebar to create up to two more administrators
+(username + temporary password; 10+ characters with a letter and a number), or to
+remove one. Each new administrator should change the temporary password in
+**Admin Profile**. You can't remove your own account, so at least one admin always
+remains. Creations and removals appear in Security Monitoring, Administrator Activity.
+The limit is `MAX_ADMINS` near the top of the admin section in `aquaai.py`.
+
 ## After deploying
 - Sign in on the **Admin** tab, review Security Monitoring regularly.
 - Back up the database file (`/data/aquaai_users.db`) on a schedule.
