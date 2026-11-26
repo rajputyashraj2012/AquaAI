@@ -1360,6 +1360,7 @@ def delete_scenario(user_id: int, scenario_id: int) -> None:
 # ADMINISTRATORS — STORAGE, SESSIONS AND ACCESS CONTROL
 # ----------------------------------------------------------------
 MIN_ADMIN_PASSWORD_LENGTH = 10
+MAX_ADMINS = 3  # total administrator accounts allowed
 ADMIN_LOCKOUT_MINUTES = 15
 ADMIN_SESSION_IDLE_MINUTES = 30
 ADMIN_SESSION_MAX_HOURS = 12
@@ -1804,6 +1805,59 @@ def admin_security(token) -> dict:
                 conn,
             ),
         }
+
+
+def admin_list_admins(token) -> pd.DataFrame:
+    """All administrator accounts (never exposes password hashes)."""
+    with db() as conn:
+        me = _require_admin(conn, token)
+        frame = pd.read_sql_query(
+            "SELECT id, username, created_at, last_login FROM admins ORDER BY id", conn
+        )
+    frame["is_you"] = frame["id"] == me
+    return frame
+
+
+def admin_create_admin(token, username: str, password: str) -> str | None:
+    """Add another administrator. Only an existing admin can do this.
+
+    Returns an error message, or None on success.
+    """
+    username = username.strip()
+    with db() as conn:
+        admin_id = _require_admin(conn, token)
+        if not 3 <= len(username) <= 254 or re.search(r"\s", username):
+            return "Username must be 3–254 characters with no spaces."
+        problem = validate_admin_password(password)
+        if problem:
+            return problem
+        if conn.execute("SELECT COUNT(*) FROM admins").fetchone()[0] >= MAX_ADMINS:
+            return f"The limit of {MAX_ADMINS} administrator accounts has been reached."
+        if conn.execute("SELECT 1 FROM users WHERE email = ?", (username.lower(),)).fetchone():
+            return "That username is already used by a member account. Choose a different one."
+        try:
+            conn.execute(
+                "INSERT INTO admins (username, password_hash, created_at) VALUES (?, ?, ?)",
+                (username, hash_password(password), _stamp()),
+            )
+        except sqlite3.IntegrityError:
+            return "An administrator with that username already exists."
+        _audit(conn, admin_id, "created administrator", username)
+    return None
+
+
+def admin_delete_admin(token, target_id: int) -> str | None:
+    """Remove another administrator (and end their sessions). Not yourself."""
+    with db() as conn:
+        admin_id = _require_admin(conn, token)
+        if int(target_id) == admin_id:
+            return "You can't remove your own account."
+        row = conn.execute("SELECT username FROM admins WHERE id = ?", (int(target_id),)).fetchone()
+        if row is None:
+            return "Administrator not found."
+        conn.execute("DELETE FROM admins WHERE id = ?", (int(target_id),))  # cascades sessions
+        _audit(conn, admin_id, "removed administrator", row["username"])
+    return None
 
 
 # ---- member activity (feeds the admin usage analytics) ---------------
@@ -2750,6 +2804,7 @@ ADMIN_PAGES = [
     "👥 User Management",
     "📈 Usage Analytics",
     "🛡️ Security Monitoring",
+    "👑 Admin Accounts",
     "🔑 Admin Profile",
 ]
 
@@ -3011,6 +3066,72 @@ def render_security_monitoring(token: str) -> None:
         st.dataframe(audit, use_container_width=True, hide_index=True)
 
 
+def render_admin_accounts(token: str) -> None:
+    admin_hero(
+        "Admin Accounts",
+        f"Add or remove administrators. Up to {MAX_ADMINS} administrator accounts are allowed.",
+    )
+    admins = admin_list_admins(token)
+    metric_cards([("Administrators", f"{len(admins)} of {MAX_ADMINS}")])
+    table = pd.DataFrame(
+        {
+            "ID": admins["id"],
+            "Username": admins["username"] + admins["is_you"].map({True: "  (you)", False: ""}),
+            "Created (UTC)": admins["created_at"].map(fmt_ts),
+            "Last sign-in (UTC)": admins["last_login"].map(fmt_ts),
+        }
+    )
+    st.dataframe(table, use_container_width=True, hide_index=True)
+
+    section("➕ Add an Administrator")
+    if len(admins) >= MAX_ADMINS:
+        st.info(f"The limit of {MAX_ADMINS} administrators has been reached. Remove one to add another.")
+    else:
+        with st.form("admin_create_form"):
+            username = st.text_input("Username or email", key="new_admin_username")
+            password = st.text_input(
+                "Temporary password", type="password", key="new_admin_password",
+                help=f"At least {MIN_ADMIN_PASSWORD_LENGTH} characters, with a letter and a number. "
+                "Share it securely; the new administrator should change it in Admin Profile.",
+            )
+            confirm = st.text_input("Confirm password", type="password", key="new_admin_confirm")
+            created = st.form_submit_button("Create administrator", use_container_width=True)
+        if created:
+            if password != confirm:
+                st.error("The passwords do not match.")
+            else:
+                error = admin_create_admin(token, username, password)
+                if error:
+                    st.error(error)
+                else:
+                    st.session_state.auth_notice = f"Administrator {username.strip()} created."
+                    st.rerun()
+
+    section("🗑️ Remove an Administrator")
+    others = admins[~admins["is_you"]]
+    if others.empty:
+        st.info("There are no other administrators to remove.")
+    else:
+        labels = dict(zip(others["id"].tolist(), others["username"].tolist()))
+        picked = st.selectbox(
+            "Administrator", list(labels), format_func=lambda i: labels[i], key="admin_remove_pick"
+        )
+        target = int(picked if picked in labels else next(iter(labels)))
+        confirmed = st.checkbox(
+            "I understand this administrator will lose access immediately", key="admin_remove_confirm"
+        )
+        if st.button("Remove administrator", key="admin_remove_button"):
+            if not confirmed:
+                st.error("Tick the confirmation box first.")
+            else:
+                error = admin_delete_admin(token, target)
+                if error:
+                    st.error(error)
+                else:
+                    st.session_state.auth_notice = f"Administrator {labels[target]} removed."
+                    st.rerun()
+
+
 def render_admin_profile(token: str, admin: dict) -> None:
     admin_hero("Admin Profile", "Your administrator account and password.")
     insight_list(
@@ -3092,6 +3213,8 @@ def render_admin_app(admin: dict) -> None:
             render_usage_analytics(token)
         elif page_name == "🛡️ Security Monitoring":
             render_security_monitoring(token)
+        elif page_name == "👑 Admin Accounts":
+            render_admin_accounts(token)
         elif page_name == "🔑 Admin Profile":
             render_admin_profile(token, admin)
     except PermissionError:
