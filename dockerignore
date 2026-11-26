@@ -1,0 +1,12 @@
+.git
+.gitignore
+.venv
+venv
+__pycache__
+*.pyc
+aquaai_data/
+*.db
+.streamlit/secrets.toml
+.streamlit/secrets.toml.example
+DEPLOY.md
+render.yaml

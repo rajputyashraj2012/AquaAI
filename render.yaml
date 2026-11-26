@@ -1,0 +1,22 @@
+# Render Blueprint: Dashboard -> New -> Blueprint -> select your repo.
+# A persistent disk requires a paid instance type (starter or higher).
+services:
+  - type: web
+    name: aquaai
+    runtime: docker
+    plan: starter
+    healthCheckPath: /_stcore/health
+    autoDeploy: true
+    envVars:
+      - key: AQUAAI_DB_PATH
+        value: /data/aquaai_users.db
+      # Render asks you for these values when the Blueprint is created.
+      # They are never stored in the repository.
+      - key: AQUAAI_ADMIN_USERNAME
+        sync: false
+      - key: AQUAAI_ADMIN_PASSWORD
+        sync: false
+    disk:
+      name: aquaai-data
+      mountPath: /data
+      sizeGB: 1
